@@ -1,0 +1,132 @@
+-- 多功能清理 + 木头自动传送篝火
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local localPlayer = Players.LocalPlayer
+
+local remoteEvents = ReplicatedStorage:FindFirstChild("RemoteEvents")
+local startDrag = remoteEvents and remoteEvents:FindFirstChild("RequestStartDraggingItem")
+local burnEvent = remoteEvents and remoteEvents:FindFirstChild("RequestBurnItem")
+
+-- ========== 删除所有名为 "AntiChea" 的文件夹 ==========
+local function deleteAntiCheaFolders(container)
+    for _, obj in ipairs(container:GetDescendants()) do
+        if obj:IsA("Folder") and obj.Name == "AntiChea" then
+            obj:Destroy()
+            print("已删除 AntiChea 文件夹:", obj.Name)
+        end
+    end
+end
+
+-- ========== 删除所有名为 "AntiFlingClient" 的脚本 ==========
+local function deleteAntiFlingClient(container)
+    for _, obj in ipairs(container:GetDescendants()) do
+        if (obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript")) and obj.Name == "AntiFlingClient" then
+            obj:Destroy()
+            print("已删除 AntiFlingClient 脚本:", obj.Name)
+        end
+    end
+end
+
+-- 扫描整个游戏（不仅 workspace，还有其他服务如 ReplicatedStorage）
+local function scanAndDelete()
+    deleteAntiCheaFolders(game)
+    deleteAntiFlingClient(game)
+end
+
+scanAndDelete()
+
+-- 监听新添加的对象（全局）
+game.DescendantAdded:Connect(function(obj)
+    if obj:IsA("Folder") and obj.Name == "AntiChea" then
+        obj:Destroy()
+        print("已删除新出现的 AntiChea 文件夹")
+    elseif (obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript")) and obj.Name == "AntiFlingClient" then
+        obj:Destroy()
+        print("已删除新出现的 AntiFlingClient 脚本")
+    end
+end)
+
+-- ========== 篝火传送部分（球体上升3格） ==========
+local function getFirePlace()
+    local campground = workspace:FindFirstChild("Campground")
+    if campground then
+        return campground:FindFirstChild("MainFire")
+    end
+    return nil
+end
+
+local function createTargetSphere()
+    local existing = workspace:FindFirstChild("FireTargetSphere")
+    if existing then existing:Destroy() end
+    local firePlace = getFirePlace()
+    local basePos = firePlace and (firePlace:GetPivot().Position + Vector3.new(0, 14, 1)) or Vector3.new(0, 14, 1)
+    local sphere = Instance.new("Part")
+    sphere.Name = "FireTargetSphere"
+    sphere.Shape = Enum.PartType.Ball
+    sphere.Size = Vector3.new(7, 7, 7)
+    sphere.CFrame = CFrame.new(basePos)
+    sphere.BrickColor = BrickColor.new("Really red")
+    sphere.Material = Enum.Material.Neon
+    sphere.Anchored = true
+    sphere.CanCollide = false
+    sphere.Parent = workspace
+    print("篝火球体已创建，中心位置", basePos)
+    return sphere
+end
+
+local sphere = createTargetSphere()
+
+local function teleportAndBurn(outer)
+    if not outer or not outer.Parent then return end
+    local root = outer:IsA("BasePart") and outer or (outer.PrimaryPart or outer:FindFirstChildWhichIsA("BasePart"))
+    if not root then return end
+    -- 瞬间移动
+    root.CFrame = CFrame.new(sphere.Position)
+    
+    -- 短暂锁定防回弹（0.3秒）
+    local heartbeatConn
+    local startTime = tick()
+    heartbeatConn = RunService.Heartbeat:Connect(function()
+        if tick() - startTime > 0.3 then
+            if heartbeatConn then heartbeatConn:Disconnect() end
+            return
+        end
+        if root and root.Parent then
+            root.CFrame = CFrame.new(sphere.Position)
+        else
+            if heartbeatConn then heartbeatConn:Disconnect() end
+        end
+    end)
+    
+    -- 拖拽
+    if startDrag then
+        pcall(function() startDrag:FireServer(outer) end)
+        print("已执行拖拽")
+    end
+    
+    -- 提交燃烧
+    local fire = getFirePlace()
+    if fire and burnEvent then
+        task.wait(0.05)
+        pcall(function() burnEvent:FireServer(fire, outer) end)
+        print("木头已提交到篝火")
+    end
+end
+
+-- 处理已有的 Outer
+for _, obj in ipairs(workspace:GetDescendants()) do
+    if obj.Name == "Outer" then
+        teleportAndBurn(obj)
+    end
+end
+
+-- 监听新生成的 Outer
+workspace.DescendantAdded:Connect(function(obj)
+    if obj.Name == "Outer" then
+        task.wait(0.05)
+        teleportAndBurn(obj)
+    end
+end)
+
+print("系统已启动：自动删除 AntiChea 文件夹和 AntiFlingClient 脚本 + 木头自动传送篝火")
