@@ -1,53 +1,22 @@
--- 多功能清理 + 木头自动传送篝火
+-- 自动吸入篝火（瞬移+清理飞马）+ 可拖拽界面
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
 local localPlayer = Players.LocalPlayer
 
 local remoteEvents = ReplicatedStorage:FindFirstChild("RemoteEvents")
 local startDrag = remoteEvents and remoteEvents:FindFirstChild("RequestStartDraggingItem")
 local burnEvent = remoteEvents and remoteEvents:FindFirstChild("RequestBurnItem")
 
--- ========== 删除所有名为 "AntiChea" 的文件夹 ==========
-local function deleteAntiCheaFolders(container)
-    for _, obj in ipairs(container:GetDescendants()) do
-        if obj:IsA("Folder") and obj.Name == "AntiChea" then
-            obj:Destroy()
-            print("已删除 AntiChea 文件夹:", obj.Name)
-        end
-    end
-end
+-- ========== 核心功能（受开关控制）==========
+local enabled = false
+local fireTargetSphere = nil
+local antiCleanupConn = nil
+local outerListenerConn = nil
+local heartbeats = {}
 
--- ========== 删除所有名为 "AntiFlingClient" 的脚本 ==========
-local function deleteAntiFlingClient(container)
-    for _, obj in ipairs(container:GetDescendants()) do
-        if (obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript")) and obj.Name == "AntiFlingClient" then
-            obj:Destroy()
-            print("已删除 AntiFlingClient 脚本:", obj.Name)
-        end
-    end
-end
-
--- 扫描整个游戏（不仅 workspace，还有其他服务如 ReplicatedStorage）
-local function scanAndDelete()
-    deleteAntiCheaFolders(game)
-    deleteAntiFlingClient(game)
-end
-
-scanAndDelete()
-
--- 监听新添加的对象（全局）
-game.DescendantAdded:Connect(function(obj)
-    if obj:IsA("Folder") and obj.Name == "AntiChea" then
-        obj:Destroy()
-        print("已删除新出现的 AntiChea 文件夹")
-    elseif (obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript")) and obj.Name == "AntiFlingClient" then
-        obj:Destroy()
-        print("已删除新出现的 AntiFlingClient 脚本")
-    end
-end)
-
--- ========== 篝火传送部分（球体上升3格） ==========
+-- 获取火堆实例（Campground/MainFire）
 local function getFirePlace()
     local campground = workspace:FindFirstChild("Campground")
     if campground then
@@ -56,6 +25,7 @@ local function getFirePlace()
     return nil
 end
 
+-- 创建红色球体（高度可调，这里默认 Y=14）
 local function createTargetSphere()
     local existing = workspace:FindFirstChild("FireTargetSphere")
     if existing then existing:Destroy() end
@@ -75,16 +45,28 @@ local function createTargetSphere()
     return sphere
 end
 
-local sphere = createTargetSphere()
+-- 删除现有的 AntiChea 文件夹和 AntiFlingClient 脚本
+local function deleteExistingAntiCheats()
+    for _, obj in ipairs(game:GetDescendants()) do
+        if obj:IsA("Folder") and obj.Name == "AntiChea" then
+            obj:Destroy()
+            print("已删除 AntiChea 文件夹:", obj.Name)
+        elseif (obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript")) and obj.Name == "AntiFlingClient" then
+            obj:Destroy()
+            print("已删除 AntiFlingClient 脚本:", obj.Name)
+        end
+    end
+end
 
+-- 传送并燃烧单个木头（瞬移+短暂锁定防回弹）
 local function teleportAndBurn(outer)
     if not outer or not outer.Parent then return end
+    if not fireTargetSphere or not fireTargetSphere.Parent then return end
     local root = outer:IsA("BasePart") and outer or (outer.PrimaryPart or outer:FindFirstChildWhichIsA("BasePart"))
     if not root then return end
-    -- 瞬间移动
-    root.CFrame = CFrame.new(sphere.Position)
-    
-    -- 短暂锁定防回弹（0.3秒）
+
+    root.CFrame = CFrame.new(fireTargetSphere.Position)
+
     local heartbeatConn
     local startTime = tick()
     heartbeatConn = RunService.Heartbeat:Connect(function()
@@ -93,19 +75,18 @@ local function teleportAndBurn(outer)
             return
         end
         if root and root.Parent then
-            root.CFrame = CFrame.new(sphere.Position)
+            root.CFrame = CFrame.new(fireTargetSphere.Position)
         else
             if heartbeatConn then heartbeatConn:Disconnect() end
         end
     end)
-    
-    -- 拖拽
+    table.insert(heartbeats, heartbeatConn)
+
     if startDrag then
         pcall(function() startDrag:FireServer(outer) end)
         print("已执行拖拽")
     end
-    
-    -- 提交燃烧
+
     local fire = getFirePlace()
     if fire and burnEvent then
         task.wait(0.05)
@@ -115,18 +96,180 @@ local function teleportAndBurn(outer)
 end
 
 -- 处理已有的 Outer
-for _, obj in ipairs(workspace:GetDescendants()) do
-    if obj.Name == "Outer" then
-        teleportAndBurn(obj)
+local function handleExistingOuter()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj.Name == "Outer" then
+            teleportAndBurn(obj)
+        end
     end
 end
 
--- 监听新生成的 Outer
-workspace.DescendantAdded:Connect(function(obj)
-    if obj.Name == "Outer" then
-        task.wait(0.05)
-        teleportAndBurn(obj)
+-- 开启功能
+local function startAll()
+    if enabled then return end
+    enabled = true
+
+    deleteExistingAntiCheats()
+    if antiCleanupConn then antiCleanupConn:Disconnect() end
+    antiCleanupConn = game.DescendantAdded:Connect(function(obj)
+        if obj:IsA("Folder") and obj.Name == "AntiChea" then
+            obj:Destroy()
+            print("已删除新出现的 AntiChea 文件夹")
+        elseif (obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript")) and obj.Name == "AntiFlingClient" then
+            obj:Destroy()
+            print("已删除新出现的 AntiFlingClient 脚本")
+        end
+    end)
+
+    fireTargetSphere = createTargetSphere()
+    handleExistingOuter()
+
+    if outerListenerConn then outerListenerConn:Disconnect() end
+    outerListenerConn = workspace.DescendantAdded:Connect(function(obj)
+        if obj.Name == "Outer" and enabled then
+            task.wait(0.05)
+            teleportAndBurn(obj)
+        end
+    end)
+
+    print("[系统] 已开启：自动删除 AntiChea/AntiFlingClient + 木头瞬移篝火")
+end
+
+-- 关闭功能
+local function stopAll()
+    if not enabled then return end
+    enabled = false
+
+    if antiCleanupConn then antiCleanupConn:Disconnect(); antiCleanupConn = nil end
+    if outerListenerConn then outerListenerConn:Disconnect(); outerListenerConn = nil end
+
+    for _, conn in ipairs(heartbeats) do
+        if conn then pcall(conn.Disconnect, conn) end
+    end
+    heartbeats = {}
+
+    if fireTargetSphere and fireTargetSphere.Parent then
+        fireTargetSphere:Destroy()
+        fireTargetSphere = nil
+    end
+
+    print("[系统] 已关闭")
+end
+
+-- ========== 可拖拽 UI ==========
+local gui = Instance.new("ScreenGui")
+gui.Name = "篝火吸入控制"
+gui.ResetOnSpawn = false
+gui.Parent = localPlayer:WaitForChild("PlayerGui")
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 280, 0, 120)
+mainFrame.Position = UDim2.new(0.5, -140, 0.3, 0)
+mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+mainFrame.BackgroundTransparency = 0.1
+mainFrame.BorderColor3 = Color3.fromRGB(100, 80, 200)
+mainFrame.BorderSizePixel = 2
+mainFrame.ClipsDescendants = true
+mainFrame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 8)
+corner.Parent = mainFrame
+
+-- 标题栏（可拖拽）
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 35)
+titleBar.BackgroundColor3 = Color3.fromRGB(50, 40, 80)
+titleBar.BackgroundTransparency = 0.3
+titleBar.Parent = mainFrame
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 6)
+titleCorner.Parent = titleBar
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, -50, 1, 0)
+titleLabel.Position = UDim2.new(0, 10, 0, 0)
+titleLabel.Text = "🔥 自动吸入篝火 (清理飞马)"
+titleLabel.TextColor3 = Color3.new(1,1,1)
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.TextSize = 14
+titleLabel.BackgroundTransparency = 1
+titleLabel.Parent = titleBar
+
+-- 关闭按钮
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 1, 0)
+closeBtn.Position = UDim2.new(1, -30, 0, 0)
+closeBtn.Text = "×"
+closeBtn.TextSize = 20
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
+closeBtn.TextColor3 = Color3.new(1,1,1)
+closeBtn.Parent = titleBar
+closeBtn.MouseButton1Click:Connect(function()
+    gui:Destroy()
+    stopAll()
+end)
+
+-- 开关按钮
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size = UDim2.new(0.6, 0, 0, 45)
+toggleBtn.Position = UDim2.new(0.2, 0, 0.55, 0)
+toggleBtn.Text = "OFF"
+toggleBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 120)
+toggleBtn.TextColor3 = Color3.new(1,1,1)
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.TextSize = 18
+toggleBtn.Parent = mainFrame
+
+local state = false
+toggleBtn.MouseButton1Click:Connect(function()
+    state = not state
+    toggleBtn.Text = state and "ON" or "OFF"
+    toggleBtn.BackgroundColor3 = state and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(100, 100, 120)
+    if state then startAll() else stopAll() end
+end)
+
+-- 状态指示小圆点
+local statusLight = Instance.new("Frame")
+statusLight.Size = UDim2.new(0, 12, 0, 12)
+statusLight.Position = UDim2.new(0.85, 0, 0.2, 0)
+statusLight.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+statusLight.BorderSizePixel = 0
+statusLight.Parent = mainFrame
+local lightCorner = Instance.new("UICorner")
+lightCorner.CornerRadius = UDim.new(1, 0)
+lightCorner.Parent = statusLight
+
+local function updateStatusLight()
+    statusLight.BackgroundColor3 = state and Color3.fromRGB(0, 200, 0) or Color3.fromRGB(200, 50, 50)
+end
+toggleBtn.MouseButton1Click:Connect(updateStatusLight)
+updateStatusLight()
+
+-- 拖拽逻辑
+local dragging = false
+local dragStart, frameStart
+titleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        frameStart = mainFrame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+titleBar.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement then dragStart = input end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+        local delta = input.Position - dragStart
+        mainFrame.Position = UDim2.new(frameStart.X.Scale, frameStart.X.Offset + delta.X,
+                                       frameStart.Y.Scale, frameStart.Y.Offset + delta.Y)
     end
 end)
 
-print("系统已启动：自动删除 AntiChea 文件夹和 AntiFlingClient 脚本 + 木头自动传送篝火")
+print("UI 已加载，点击开关即可启用/禁用自动吸入篝火和清理飞马功能")
