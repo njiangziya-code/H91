@@ -52,7 +52,7 @@ local lockedWoods = {}
 local function playSphereHit()
     if not fireTargetSphere then return end
     local originalCF = fireTargetSphere.CFrame
-    local downCF = originalCF * CFrame.new(0, -4, 0)   -- 向下4格
+    local downCF = originalCF * CFrame.new(0, -7, 0)   -- 向下4格
     -- 使用 Tween 快速下移并弹回
     local tweenInfo = TweenInfo.new(0.1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     local downTween = TweenService:Create(fireTargetSphere, tweenInfo, {CFrame = downCF})
